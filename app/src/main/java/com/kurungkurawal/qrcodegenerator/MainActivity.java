@@ -34,13 +34,21 @@ import com.google.zxing.qrcode.QRCodeWriter;
 import com.sendgrid.SendGrid;
 import com.sendgrid.SendGridException;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 public class MainActivity extends AppCompatActivity {
+    private static final int BUFFER = 1000;
     private final String tag = "QRCGEN";
     private final int REQUEST_PERMISSION = 0xf0;
 
@@ -57,7 +65,7 @@ public class MainActivity extends AppCompatActivity {
     String result;
     int j;
     ArrayList<Codes> codes = new ArrayList<>();
-
+    ArrayList<Uri> bitmaps = new ArrayList<>();
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -82,7 +90,8 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
                 else {
-                    generateImage(Integer.parseInt(txtQRText.getText().toString()));
+                    new GenerateBitmapsAsynkTask(getApplicationContext(),bitmaps,Integer.parseInt(txtQRText.getText().toString())).execute();
+                    Log.d("started","True");
 
                 }
 
@@ -108,7 +117,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        txtQRText.setText("hello");
+        txtQRText.setText("eg. 10");
     }
 
     @Override
@@ -116,10 +125,10 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_PERMISSION) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                self.generateImage(Integer.parseInt(txtQRText.getText().toString()));
+                new GenerateBitmapsAsynkTask(getApplicationContext(),bitmaps,Integer.parseInt(txtQRText.getText().toString())).execute();
                 //saveImage();
             } else {
-                alert("Aplikasi tidak mendapat akses untuk menambahkan gambar.");
+                alert("Permission not given");
             }
         }
     }
@@ -337,6 +346,96 @@ public class MainActivity extends AppCompatActivity {
             txtSaveHint.setVisibility(View.VISIBLE);
         }
     }
+    private class GenerateBitmapsAsynkTask extends AsyncTask<Void,Void,Void>{
+        ArrayList<Uri> bitmaps = new ArrayList<>();
+        Context context;
+        int numberImages;
+        public GenerateBitmapsAsynkTask(Context context, ArrayList<Uri> bitmaps, int numberImages){
+            this.bitmaps = bitmaps;
+            this.context = context;
+            this.numberImages = numberImages;
+        }
+
+        @Override
+        protected void onPostExecute(Void aVoid) {
+            super.onPostExecute(aVoid);
+            Log.d("Image List Size:", String.valueOf(bitmaps.size()));
+        }
+
+        @Override
+        protected void onProgressUpdate(Void... values) {
+            super.onProgressUpdate(values);
+            Log.d("Status", String.valueOf(values));
+        }
+
+        @Override
+        protected Void doInBackground(Void... voids) {
+            Log.d("Images Total", String.valueOf(numberImages));
+            for(j= 1; j<numberImages+1; j++){
+                self.qrImage = null;
+                final String text = "Access Code " + j;
+                final int finalJ = j;
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        int size = imgResult.getMeasuredWidth();
+                        if( size > 1){
+                            //Log.e(tag, "size is set manually");
+                            size = 260;
+                        }
+                        Map<EncodeHintType, Object> hintMap = new EnumMap<>(EncodeHintType.class);
+                        hintMap.put(EncodeHintType.CHARACTER_SET, "UTF-8");
+                        hintMap.put(EncodeHintType.MARGIN, 1);
+                        QRCodeWriter qrCodeWriter = new QRCodeWriter();
+                        try {
+                            BitMatrix byteMatrix = qrCodeWriter.encode(text, BarcodeFormat.QR_CODE, size,
+                                    size, hintMap);
+                            int height = byteMatrix.getHeight();
+                            int width = byteMatrix.getWidth();
+                            Bitmap qrImage = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+                            for (int x = 0; x < width; x++){
+                                for (int y = 0; y < height; y++){
+                                    qrImage.setPixel(x, y, byteMatrix.get(x,y) ? Color.BLACK : Color.WHITE);
+
+                                }
+                            }
+                            String fname = "qrcode-" + finalJ;
+                            boolean success = true;
+                            try {
+                                result = MediaStore.Images.Media.insertImage(
+                                        getContentResolver(),
+                                        qrImage,
+                                        fname,
+                                        "QRCode Image"
+                                );
+                                //Codes mCode = new Codes("Code "+finalJ, Uri.parse(result));
+                                //Log.d("numFiles", String.valueOf(codes.size()));
+                                //codes.add(mCode);
+//                                        if(codes.size() == 20){
+//                                            new EmailAsyncTask(getApplicationContext(),codes).execute();
+//                                        }
+                                if (result == null) {
+                                    success = false;
+                                } else {
+                                    bitmaps.add(Uri.parse(result));
+                                    Log.e(tag, result);
+                                    Log.d("ARRAYLIST SIZE", String.valueOf(bitmaps.size()));
+                                }
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                                success = false;
+                            }
+
+                        } catch (WriterException e) {
+                            e.printStackTrace();
+                            alert(e.getMessage());
+                        }
+                    }
+                }).start();
+            }
+            return null;
+        }
+    }
     private static class EmailAsyncTask extends AsyncTask<Void,Void,Void>{
         Context context;
         String mMsgResponse;
@@ -379,6 +478,34 @@ public class MainActivity extends AppCompatActivity {
                 Log.e("SendAppExample", e.toString());
             }
             return null;
+        }
+    }
+    public void zip(ArrayList<Uri> _files, String zipFileName) {
+        try {
+            BufferedInputStream origin = null;
+            FileOutputStream dest = new FileOutputStream(zipFileName);
+            ZipOutputStream out = new ZipOutputStream(new BufferedOutputStream(
+                    dest));
+            byte data[] = new byte[BUFFER];
+
+            for (int i = 0; i < _files.size(); i++) {
+                Log.v("Compress", "Adding: " + _files.get(i));
+//                FileInputStream fi = new FileInputStream(_files.get(i));
+//                origin = new BufferedInputStream(fi, BUFFER);
+                File file = new File(String.valueOf(_files.get(i)));
+                ZipEntry entry = new ZipEntry(String.valueOf(file));
+                out.putNextEntry(entry);
+                int count;
+
+                while ((count = origin.read(data, 0, BUFFER)) != -1) {
+                    out.write(data, 0, count);
+                }
+                origin.close();
+            }
+
+            out.close();
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 }
